@@ -120,6 +120,38 @@ func (s *Service) Reconcile(ctx context.Context, spec interface{}) error {
 	// Set the cloud provider tag
 	additionalTags[infrav1.ClusterAzureCloudProviderTagKey(s.MachineScope.Name())] = string(infrav1.ResourceLifecycleOwned)
 
+	var osProfile *compute.OSProfile
+	if vmSpec.OSDisk.OSType == "Linux" {
+		osProfile = &compute.OSProfile{
+			ComputerName:  to.StringPtr(vmSpec.Name),
+			AdminUsername: to.StringPtr(azure.DefaultUserName),
+			CustomData:    to.StringPtr(vmSpec.CustomData),
+			LinuxConfiguration: &compute.LinuxConfiguration{
+				DisablePasswordAuthentication: to.BoolPtr(true),
+				SSH: &compute.SSHConfiguration{
+					PublicKeys: &[]compute.SSHPublicKey{
+						{
+							Path:    to.StringPtr(fmt.Sprintf("/home/%s/.ssh/authorized_keys", azure.DefaultUserName)),
+							KeyData: to.StringPtr(vmSpec.SSHKeyData),
+						},
+					},
+				},
+			},
+		}
+	}
+	if vmSpec.OSDisk.OSType == "Windows" {
+		randomPassword, err := GenerateRandomString(32)
+		if err != nil {
+			return errors.Wrapf(err, "failed to generate random string")
+		}
+		osProfile = &compute.OSProfile{
+			ComputerName:  to.StringPtr(vmSpec.Name),
+			AdminUsername: to.StringPtr(azure.DefaultUserName),
+			AdminPassword: to.StringPtr(randomPassword),
+			CustomData:    to.StringPtr(vmSpec.CustomData),
+		}
+	}
+
 	virtualMachine := compute.VirtualMachine{
 		Location: to.StringPtr(s.Scope.Location()),
 		Tags: converters.TagsToMap(infrav1.Build(infrav1.BuildParams{
@@ -134,22 +166,7 @@ func (s *Service) Reconcile(ctx context.Context, spec interface{}) error {
 				VMSize: compute.VirtualMachineSizeTypes(vmSpec.Size),
 			},
 			StorageProfile: storageProfile,
-			OsProfile: &compute.OSProfile{
-				ComputerName:  to.StringPtr(vmSpec.Name),
-				AdminUsername: to.StringPtr(azure.DefaultUserName),
-				AdminPassword: to.StringPtr(randomPassword),
-				CustomData:    to.StringPtr(vmSpec.CustomData),
-				LinuxConfiguration: &compute.LinuxConfiguration{
-					SSH: &compute.SSHConfiguration{
-						PublicKeys: &[]compute.SSHPublicKey{
-							{
-								Path:    to.StringPtr(fmt.Sprintf("/home/%s/.ssh/authorized_keys", azure.DefaultUserName)),
-								KeyData: to.StringPtr(sshKeyData),
-							},
-						},
-					},
-				},
-			},
+			OsProfile:      osProfile,
 			NetworkProfile: &compute.NetworkProfile{
 				NetworkInterfaces: &[]compute.NetworkInterfaceReference{
 					{
